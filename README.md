@@ -1,0 +1,1 @@
+# Guardicore Azure integration templates

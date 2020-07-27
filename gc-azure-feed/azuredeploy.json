@@ -1,0 +1,245 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "storageAccountType": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_GRS",
+        "Standard_ZRS",
+        "Premium_LRS"
+      ],
+      "metadata": {
+        "description": "Storage Account type for Azure Function App"
+      }
+    },
+    "eventhubSku": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "Standard"
+      ],
+      "metadata": {
+        "description": "SKU and billing tier for EventHub handling audit logs"
+      }
+    },
+    "eventhubThroughputUnits": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 20,
+      "metadata": {
+        "description": "Throughput Units for EventHub handling audit logs"
+      }
+    },
+    "TargetUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Destination URL for aggregated audit logs"
+      }
+    }
+  },
+  "variables": {
+    "location": "[resourceGroup().location]",
+    "storageAccountName": "[concat('store', uniquestring(resourceGroup().id))]",
+    "eventHubNamespaceName": "[concat('gceventhubns-', uniquestring(resourceGroup().id))]",
+    "eventHubName": "[concat('gceventhub', uniquestring(resourceGroup().id))]",
+    "eventHubRule": "[concat('gceventhubrule', uniquestring(resourceGroup().id))]",
+    "eventHubRuleId": "[resourceId('Microsoft.EventHub/namespaces/authorizationRules', variables('eventHubNamespaceName'), variables('eventHubRule'))]",
+    "appInsightName": "[concat('gcappinsight', uniquestring(resourceGroup().id))]",
+    "appName": "[concat('GcAzureFeed', uniquestring(resourceGroup().id))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2019-04-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "[parameters('storageAccountType')]"
+      },
+      "kind": "StorageV2",
+      "properties": {}
+    },
+    {
+      "apiVersion": "2017-04-01",
+      "type": "Microsoft.EventHub/namespaces",
+      "name": "[variables('eventHubNamespaceName')]",
+      "location": "[variables('location')]",
+      "sku": {
+        "name": "[parameters('eventhubSku')]",
+        "tier": "[parameters('eventhubSku')]",
+        "capacity": "[parameters('eventhubThroughputUnits')]"
+      },
+      "properties": {
+        "isAutoInflateEnabled": false,
+        "maximumThroughputUnits": 0
+      }
+    },
+    {
+      "apiVersion": "2017-04-01",
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "name": "[concat(variables('eventHubNamespaceName'), '/', variables('eventHubName'))]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
+      ],
+      "properties": {
+        "messageRetentionInDays": 1,
+        "partitionCount": 2
+      }
+    },
+    {
+      "apiVersion": "2017-04-01",
+      "name": "[concat(variables('eventHubNamespaceName'), '/', variables('eventHubRule'))]",
+      "type": "Microsoft.EventHub/namespaces/AuthorizationRules",
+      "dependsOn": [
+        "[concat('Microsoft.EventHub/namespaces/', variables('eventHubNamespaceName'))]"
+      ],
+      "properties": {
+        "rights": ["Listen"]
+      }
+    },
+    {
+      "apiVersion": "2018-05-01-preview",
+      "name": "[variables('appInsightName')]",
+      "type": "microsoft.insights/components",
+      "location": "[variables('location')]",
+      "tags": {},
+      "properties": {
+        "ApplicationId": "[variables('appInsightName')]"
+      }
+    },
+    {
+      "apiVersion": "2019-08-01",
+      "type": "Microsoft.Web/sites",
+      "name": "[variables('appName')]",
+      "location": "[variables('location')]",
+      "kind": "functionapp,linux",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+        "[resourceId('microsoft.insights/components', variables('appInsightName'))]",
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('eventHubName'))]",
+        "[resourceId('Microsoft.EventHub/namespaces/AuthorizationRules', variables('eventHubNamespaceName'), variables('eventHubRule'))]"
+      ],
+      "properties": {
+        "siteConfig": {
+          "appSettings": []
+        },
+        "reserved": true
+      }
+    },
+    {
+      "apiVersion": "2015-01-01",
+      "type": "Microsoft.Resources/deployments",
+      "name": "updateAppConfig",
+      "dependsOn": [
+          "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "parameters": {},
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {},
+          "variables": {},
+          "resources": [
+          {
+            "apiVersion": "2019-08-01",
+            "type": "Microsoft.Web/sites",
+            "name": "[variables('appName')]",
+            "location": "[variables('location')]",
+            "kind": "functionapp,linux",
+            "identity": {
+              "type": "SystemAssigned"
+            },
+            "dependsOn": [],
+            "properties": {
+              "siteConfig": {
+                "appSettings": [
+                  {
+                    "name": "AzureWebJobsStorage",
+                    "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('appInsightName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2019-06-01').keys[0].value)]"
+                  },
+                  {
+                    "name": "FUNCTIONS_EXTENSION_VERSION",
+                    "value": "~3"
+                  },
+                  {
+                    "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+                    "value": "[reference(resourceId('microsoft.insights/components', variables('appInsightName')), '2018-05-01-preview').InstrumentationKey]"
+                  },
+                  {
+                    "name": "FUNCTIONS_WORKER_RUNTIME",
+                    "value": "python"
+                  },
+                  {
+                    "name": "AZURE_CLIENT_ID",
+                    "value": "[reference(resourceId('Microsoft.Web/sites', variables('appName')), '2019-08-01', 'full').identity.principalId]"
+                  },
+                  {
+                    "name": "EVENTHUB_NAME",
+                    "value": "[variables('eventHubName')]"
+                  },
+                  {
+                    "name": "EVENTHUB_CONNECTION_STR",
+                    "value": "[listkeys(variables('eventHubRuleId'), '2017-04-01').primaryConnectionString]"
+                  },
+                  {
+                    "name": "EVENTHUB_CONSUMER_GROUP",
+                    "value": "$Default"
+                  },
+                  {
+                    "name": "STORAGE_CONNECTION_STR",
+                    "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2019-06-01').keys[0].value)]"
+                  },
+                  {
+                    "name": "REPORTS_TARGET_URL",
+                    "value": "[parameters('TargetUrl')]"
+                  }
+                ]
+              },
+              "reserved": true
+            }
+          }
+          ],
+          "outputs": {}
+          }
+        }
+    }
+  ],
+  "outputs": {
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    },
+    "eventHubNamespaceName": {
+      "type": "string",
+      "value": "[variables('eventHubNamespaceName')]"
+    },
+    "eventHubName": {
+      "type": "string",
+      "value": "[variables('eventHubName')]"
+    },
+    "eventHubRule": {
+      "type": "string",
+      "value": "[variables('eventHubRule')]"
+    },
+    "appInsightName": {
+      "type": "string",
+      "value": "[variables('appInsightName')]"
+    },
+    "appName": {
+      "type": "string",
+      "value": "[variables('appName')]"
+    }
+  }
+}
