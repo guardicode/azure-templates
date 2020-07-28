@@ -1,0 +1,9 @@
+{
+  "$schema": "https://aka.ms/azure-quickstart-templates-metadata-schema#",
+  "type": "QuickStart",
+  "itemDisplayName": "Guardicore integration App",
+  "description": "This template allows you to deploy a Guardicore's Azure App which integrates with Gaurdicore's Centra which brings microsegmentation into PaaS",
+  "summary": "Deploys Azure Web App with Eventhub in order to handle Azure Resources's info",
+  "githubUsername": "ivasylenko",
+  "dateUpdated": "2020-07-28"
+}
